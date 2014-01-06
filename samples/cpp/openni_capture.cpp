@@ -23,7 +23,8 @@ static void help()
          << endl;
 }
 
-static void colorizeDisparity( const Mat& gray, Mat& rgb, double maxDisp=-1.f, float S=1.f, float V=1.f )
+static void colorizeDisparity( const Mat& gray, Mat& rgb,
+                               double maxDisp=-1.f, float S=1.f, float V=1.f )
 {
     CV_Assert( !gray.empty() );
     CV_Assert( gray.type() == CV_8UC1 );
@@ -78,7 +79,7 @@ static void colorizeDisparity( const Mat& gray, Mat& rgb, double maxDisp=-1.f, f
 
 static float getMaxDisparity( VideoCapture& capture )
 {
-    const int minDistance = 400; // mm
+    const int minDistance = 300; // mm
     float b = (float)capture.get( CAP_OPENNI_DEPTH_GENERATOR_BASELINE ); // mm
     float F = (float)capture.get( CAP_OPENNI_DEPTH_GENERATOR_FOCAL_LENGTH ); // pixels
     return b * F / minDistance;
@@ -96,7 +97,9 @@ static void printCommandLineParams()
     cout << "-r        Filename of .oni video file. The data will grabbed from it." << endl ;
 }
 
-static void parseCommandLine( int argc, char* argv[], bool& isColorizeDisp, bool& isFixedMaxDisp, int& imageMode, bool retrievedImageFlags[],
+static void parseCommandLine( int argc, char* argv[],
+                              bool& isColorizeDisp, bool& isFixedMaxDisp,
+                              int& imageMode, bool retrievedImageFlags[],
                        string& filename, bool& isFileReading )
 {
     // set defaut values
@@ -174,7 +177,8 @@ static void parseCommandLine( int argc, char* argv[], bool& isColorizeDisp, bool
 }
 
 /*
- * To work with Kinect or XtionPRO the user must install OpenNI library and PrimeSensorModule for OpenNI and
+ * To work with Kinect or XtionPRO the user must install
+ *  OpenNI library and PrimeSensorModule for OpenNI and
  * configure OpenCV with WITH_OPENNI flag is ON (using CMake).
  */
 int main( int argc, char* argv[] )
@@ -298,9 +302,14 @@ int main( int argc, char* argv[] )
             if( retrievedImageFlags[4] && capture.retrieve( grayImage, CAP_OPENNI_GRAY_IMAGE ) )
                 imshow( "gray image", grayImage );
         }
-
-        if( waitKey( 30 ) >= 0 )
+        int _key = waitKey( 20 );
+        if( _key == 'q' )
             break;
+        if( _key == 's' ) {
+            std::string filename = std::string(argv[0])+"_"+"savedRGB.png";
+            std::cout<<"saving img "<<filename<<std::endl;
+            imwrite(filename,bgrImage);
+        }
     }
 
     return 0;
