@@ -548,13 +548,31 @@ void referenceRGB2YUV(const Mat& rgb, Mat& yuv, RGBreader* rgbReader, YUVwriter*
 
 struct ConversionYUV
 {
-    ConversionYUV( const int code )
+    explicit ConversionYUV( const int code )
     {
         yuvReader_  = YUVreader :: getReader(code);
         yuvWriter_  = YUVwriter :: getWriter(code);
         rgbReader_  = RGBreader :: getReader(code);
         rgbWriter_  = RGBwriter :: getWriter(code);
         grayWriter_ = GRAYwriter:: getWriter(code);
+    }
+
+    ~ConversionYUV()
+    {
+        if (yuvReader_)
+            delete yuvReader_;
+
+        if (yuvWriter_)
+            delete yuvWriter_;
+
+        if (rgbReader_)
+            delete rgbReader_;
+
+        if (rgbWriter_)
+            delete rgbWriter_;
+
+        if (grayWriter_)
+            delete grayWriter_;
     }
 
     int getDcn()
@@ -603,7 +621,7 @@ CV_ENUM(YUVCVTS, CV_YUV2RGB_NV12, CV_YUV2BGR_NV12, CV_YUV2RGB_NV21, CV_YUV2BGR_N
                  CV_YUV2RGBA_YUY2, CV_YUV2BGRA_YUY2, CV_YUV2RGBA_YVYU, CV_YUV2BGRA_YVYU,
                  CV_YUV2GRAY_420, CV_YUV2GRAY_UYVY, CV_YUV2GRAY_YUY2,
                  CV_YUV2BGR, CV_YUV2RGB, CV_RGB2YUV_YV12, CV_BGR2YUV_YV12, CV_RGBA2YUV_YV12,
-                 CV_BGRA2YUV_YV12, CV_RGB2YUV_I420, CV_BGR2YUV_I420, CV_RGBA2YUV_I420, CV_BGRA2YUV_I420);
+                 CV_BGRA2YUV_YV12, CV_RGB2YUV_I420, CV_BGR2YUV_I420, CV_RGBA2YUV_I420, CV_BGRA2YUV_I420)
 
 typedef ::testing::TestWithParam<YUVCVTS> Imgproc_ColorYUV;
 

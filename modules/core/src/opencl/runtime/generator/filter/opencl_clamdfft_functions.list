@@ -16,7 +16,7 @@ clAmdFftEnqueueTransform
 //clAmdFftGetPlanTransposeResult
 //clAmdFftGetResultLocation
 clAmdFftGetTmpBufSize
-//clAmdFftGetVersion
+clAmdFftGetVersion
 clAmdFftSetLayout
 clAmdFftSetPlanBatchSize
 //clAmdFftSetPlanDim
@@ -24,7 +24,7 @@ clAmdFftSetPlanDistance
 clAmdFftSetPlanInStride
 //clAmdFftSetPlanLength
 clAmdFftSetPlanOutStride
-//clAmdFftSetPlanPrecision
+clAmdFftSetPlanPrecision
 clAmdFftSetPlanScale
 //clAmdFftSetPlanTransposeResult
 clAmdFftSetResultLocation

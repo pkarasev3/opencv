@@ -44,7 +44,7 @@
 //M*/
 
 #include "precomp.hpp"
-#include "opencl_kernels.hpp"
+#include "opencl_kernels_imgproc.hpp"
 
 namespace cv {
 
@@ -91,6 +91,8 @@ private:
     Mat * dst;
 };
 
+#ifdef HAVE_OPENCL
+
 static bool ocl_blendLinear( InputArray _src1, InputArray _src2, InputArray _weights1, InputArray _weights2, OutputArray _dst )
 {
     int type = _src1.type(), depth = CV_MAT_DEPTH(type), cn = CV_MAT_CN(type);
@@ -109,9 +111,11 @@ static bool ocl_blendLinear( InputArray _src1, InputArray _src2, InputArray _wei
            ocl::KernelArg::ReadOnlyNoSize(weights1), ocl::KernelArg::ReadOnlyNoSize(weights2),
            ocl::KernelArg::WriteOnly(dst));
 
-    size_t globalsize[2] = { dst.cols, dst.rows };
+    size_t globalsize[2] = { (size_t)dst.cols, (size_t)dst.rows };
     return k.run(2, globalsize, NULL, false);
 }
+
+#endif
 
 }
 
@@ -126,8 +130,8 @@ void cv::blendLinear( InputArray _src1, InputArray _src2, InputArray _weights1, 
 
     _dst.create(size, type);
 
-    if (ocl::useOpenCL() && _dst.isUMat() && ocl_blendLinear(_src1, _src2, _weights1, _weights2, _dst))
-        return;
+    CV_OCL_RUN(_dst.isUMat(),
+               ocl_blendLinear(_src1, _src2, _weights1, _weights2, _dst))
 
     Mat src1 = _src1.getMat(), src2 = _src2.getMat(), weights1 = _weights1.getMat(),
             weights2 = _weights2.getMat(), dst = _dst.getMat();

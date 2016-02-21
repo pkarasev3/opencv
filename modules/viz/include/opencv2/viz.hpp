@@ -41,9 +41,6 @@
 //  * Ozan Tonkal, ozantonkal@gmail.com
 //  * Anatoly Baksheev, Itseez Inc.  myname.mysurname <> mycompany.com
 //
-//  OpenCV Viz module is complete rewrite of
-//  PCL visualization module (www.pointclouds.org)
-//
 //M*/
 
 #ifndef __OPENCV_VIZ_HPP__
@@ -52,46 +49,36 @@
 #include <opencv2/viz/types.hpp>
 #include <opencv2/viz/widgets.hpp>
 #include <opencv2/viz/viz3d.hpp>
+#include <opencv2/viz/vizcore.hpp>
 
-namespace cv
-{
-    namespace viz
-    {
-        //! takes coordiante frame data and builds transfrom to global coordinate frame
-        CV_EXPORTS Affine3f makeTransformToGlobal(const Vec3f& axis_x, const Vec3f& axis_y, const Vec3f& axis_z, const Vec3f& origin = Vec3f::all(0));
+/**
+  @defgroup viz 3D Visualizer
 
-        //! constructs camera pose from position, focal_point and up_vector (see gluLookAt() for more infromation)
-        CV_EXPORTS Affine3f makeCameraPose(const Vec3f& position, const Vec3f& focal_point, const Vec3f& y_dir);
+This section describes 3D visualization window as well as classes and methods that are used to
+interact with it.
 
-        //! retrieves a window by its name. If no window with such name, then it creates new.
-        CV_EXPORTS Viz3d get(const String &window_name);
+3D visualization window (see Viz3d) is used to display widgets (see Widget), and it provides several
+methods to interact with scene and widgets.
 
-        //! Unregisters all Viz windows from internal database. After it 'get()' will create new windows instead getting existing from the database.
-        CV_EXPORTS void unregisterAllWindows();
+  @{
+    @defgroup viz_widget Widget
 
-        //! checks float value for Nan
-        inline bool isNan(float x)
-        {
-            unsigned int *u = reinterpret_cast<unsigned int *>(&x);
-            return ((u[0] & 0x7f800000) == 0x7f800000) && (u[0] & 0x007fffff);
-        }
+In this section, the widget framework is explained. Widgets represent 2D or 3D objects, varying from
+simple ones such as lines to complex one such as point clouds and meshes.
 
-        //! checks double value for Nan
-        inline bool isNan(double x)
-        {
-            unsigned int *u = reinterpret_cast<unsigned int *>(&x);
-            return (u[1] & 0x7ff00000) == 0x7ff00000 && (u[0] != 0 || (u[1] & 0x000fffff) != 0);
-        }
+Widgets are **implicitly shared**. Therefore, one can add a widget to the scene, and modify the
+widget without re-adding the widget.
 
-        //! checks vectors for Nans
-        template<typename _Tp, int cn> inline bool isNan(const Vec<_Tp, cn>& v)
-        { return isNan(v.val[0]) || isNan(v.val[1]) || isNan(v.val[2]); }
+@code
+// Create a cloud widget
+viz::WCloud cw(cloud, viz::Color::red());
+// Display it in a window
+myWindow.showWidget("CloudWidget1", cw);
+// Modify it, and it will be modified in the window.
+cw.setColor(viz::Color::yellow());
+@endcode
 
-        //! checks point for Nans
-        template<typename _Tp> inline bool isNan(const Point3_<_Tp>& p)
-        { return isNan(p.x) || isNan(p.y) || isNan(p.z); }
-
-    } /* namespace viz */
-} /* namespace cv */
+  @}
+*/
 
 #endif /* __OPENCV_VIZ_HPP__ */

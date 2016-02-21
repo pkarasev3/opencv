@@ -46,9 +46,11 @@
 #include <string>
 #include "opencv2/opencv_modules.hpp"
 #include <opencv2/core/utility.hpp>
+#include "opencv2/imgcodecs.hpp"
 #include "opencv2/highgui.hpp"
 #include "opencv2/stitching/detail/autocalib.hpp"
 #include "opencv2/stitching/detail/blenders.hpp"
+#include "opencv2/stitching/detail/timelapsers.hpp"
 #include "opencv2/stitching/detail/camera.hpp"
 #include "opencv2/stitching/detail/exposure_compensate.hpp"
 #include "opencv2/stitching/detail/matchers.hpp"
@@ -71,8 +73,8 @@ static void printUsage()
         "  --preview\n"
         "      Run stitching in the preview mode. Works faster than usual mode,\n"
         "      but output image will have lower resolution.\n"
-        "  --try_gpu (yes|no)\n"
-        "      Try to use GPU. The default value is 'no'. All default values\n"
+        "  --try_cuda (yes|no)\n"
+        "      Try to use CUDA. The default value is 'no'. All default values\n"
         "      are for CPU mode.\n"
         "\nMotion Estimation Flags:\n"
         "  --work_megapix <float>\n"
@@ -116,14 +118,18 @@ static void printUsage()
         "  --blend_strength <float>\n"
         "      Blending strength from [0,100] range. The default is 5.\n"
         "  --output <result_img>\n"
-        "      The default is 'result.jpg'.\n";
+        "      The default is 'result.jpg'.\n"
+        "  --timelapse (as_is|crop) \n"
+        "      Output warped images separately as frames of a time lapse movie, with 'fixed_' prepended to input file names.\n"
+        "  --rangewidth <int>\n"
+        "      uses range_width to limit number of images to match with.\n";
 }
 
 
 // Default command line args
 vector<String> img_names;
 bool preview = false;
-bool try_gpu = false;
+bool try_cuda = false;
 double work_megapix = 0.6;
 double seam_megapix = 0.1;
 double compose_megapix = -1;
@@ -140,8 +146,12 @@ int expos_comp_type = ExposureCompensator::GAIN_BLOCKS;
 float match_conf = 0.3f;
 string seam_find_type = "gc_color";
 int blend_type = Blender::MULTI_BAND;
+int timelapse_type = Timelapser::AS_IS;
 float blend_strength = 5;
 string result_name = "result.jpg";
+bool timelapse = false;
+int range_width = -1;
+
 
 static int parseCmdArgs(int argc, char** argv)
 {
@@ -161,15 +171,15 @@ static int parseCmdArgs(int argc, char** argv)
         {
             preview = true;
         }
-        else if (string(argv[i]) == "--try_gpu")
+        else if (string(argv[i]) == "--try_cuda")
         {
             if (string(argv[i + 1]) == "no")
-                try_gpu = false;
+                try_cuda = false;
             else if (string(argv[i + 1]) == "yes")
-                try_gpu = true;
+                try_cuda = true;
             else
             {
-                cout << "Bad --try_gpu flag value\n";
+                cout << "Bad --try_cuda flag value\n";
                 return -1;
             }
             i++;
@@ -304,6 +314,26 @@ static int parseCmdArgs(int argc, char** argv)
             }
             i++;
         }
+        else if (string(argv[i]) == "--timelapse")
+        {
+            timelapse = true;
+
+            if (string(argv[i + 1]) == "as_is")
+                timelapse_type = Timelapser::AS_IS;
+            else if (string(argv[i + 1]) == "crop")
+                timelapse_type = Timelapser::CROP;
+            else
+            {
+                cout << "Bad timelapse method\n";
+                return -1;
+            }
+            i++;
+        }
+        else if (string(argv[i]) == "--rangewidth")
+        {
+            range_width = atoi(argv[i + 1]);
+            i++;
+        }
         else if (string(argv[i]) == "--blend_strength")
         {
             blend_strength = static_cast<float>(atof(argv[i + 1]));
@@ -331,7 +361,9 @@ int main(int argc, char* argv[])
     int64 app_start_time = getTickCount();
 #endif
 
+#if 0
     cv::setBreakOnError(true);
+#endif
 
     int retval = parseCmdArgs(argc, argv);
     if (retval)
@@ -356,8 +388,8 @@ int main(int argc, char* argv[])
     Ptr<FeaturesFinder> finder;
     if (features_type == "surf")
     {
-#ifdef HAVE_OPENCV_NONFREE
-        if (try_gpu && cuda::getCudaEnabledDeviceCount() > 0)
+#ifdef HAVE_OPENCV_XFEATURES2D
+        if (try_cuda && cuda::getCudaEnabledDeviceCount() > 0)
             finder = makePtr<SurfFeaturesFinderGpu>();
         else
 #endif
@@ -430,9 +462,19 @@ int main(int argc, char* argv[])
     t = getTickCount();
 #endif
     vector<MatchesInfo> pairwise_matches;
-    BestOf2NearestMatcher matcher(try_gpu, match_conf);
-    matcher(features, pairwise_matches);
-    matcher.collectGarbage();
+    if (range_width==-1)
+    {
+        BestOf2NearestMatcher matcher(try_cuda, match_conf);
+        matcher(features, pairwise_matches);
+        matcher.collectGarbage();
+    }
+    else
+    {
+        BestOf2NearestRangeMatcher matcher(range_width, try_cuda, match_conf);
+        matcher(features, pairwise_matches);
+        matcher.collectGarbage();
+    }
+
     LOGLN("Pairwise matching, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec");
 
     // Check if we should save matches graph
@@ -525,7 +567,7 @@ int main(int argc, char* argv[])
     {
         vector<Mat> rmats;
         for (size_t i = 0; i < cameras.size(); ++i)
-            rmats.push_back(cameras[i].R);
+            rmats.push_back(cameras[i].R.clone());
         waveCorrect(rmats, wave_correct);
         for (size_t i = 0; i < cameras.size(); ++i)
             cameras[i].R = rmats[i];
@@ -537,10 +579,10 @@ int main(int argc, char* argv[])
 #endif
 
     vector<Point> corners(num_images);
-    vector<Mat> masks_warped(num_images);
-    vector<Mat> images_warped(num_images);
+    vector<UMat> masks_warped(num_images);
+    vector<UMat> images_warped(num_images);
     vector<Size> sizes(num_images);
-    vector<Mat> masks(num_images);
+    vector<UMat> masks(num_images);
 
     // Preapre images masks
     for (int i = 0; i < num_images; ++i)
@@ -553,7 +595,7 @@ int main(int argc, char* argv[])
 
     Ptr<WarperCreator> warper_creator;
 #ifdef HAVE_OPENCV_CUDAWARPING
-    if (try_gpu && cuda::getCudaEnabledDeviceCount() > 0)
+    if (try_cuda && cuda::getCudaEnabledDeviceCount() > 0)
     {
         if (warp_type == "plane")
             warper_creator = makePtr<cv::PlaneWarperGpu>();
@@ -619,7 +661,7 @@ int main(int argc, char* argv[])
         warper->warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
     }
 
-    vector<Mat> images_warped_f(num_images);
+    vector<UMat> images_warped_f(num_images);
     for (int i = 0; i < num_images; ++i)
         images_warped[i].convertTo(images_warped_f[i], CV_32F);
 
@@ -635,8 +677,8 @@ int main(int argc, char* argv[])
         seam_finder = makePtr<detail::VoronoiSeamFinder>();
     else if (seam_find_type == "gc_color")
     {
-#ifdef HAVE_OPENCV_CUDA
-        if (try_gpu && cuda::getCudaEnabledDeviceCount() > 0)
+#ifdef HAVE_OPENCV_CUDALEGACY
+        if (try_cuda && cuda::getCudaEnabledDeviceCount() > 0)
             seam_finder = makePtr<detail::GraphCutSeamFinderGpu>(GraphCutSeamFinderBase::COST_COLOR);
         else
 #endif
@@ -644,8 +686,8 @@ int main(int argc, char* argv[])
     }
     else if (seam_find_type == "gc_colorgrad")
     {
-#ifdef HAVE_OPENCV_CUDA
-        if (try_gpu && cuda::getCudaEnabledDeviceCount() > 0)
+#ifdef HAVE_OPENCV_CUDALEGACY
+        if (try_cuda && cuda::getCudaEnabledDeviceCount() > 0)
             seam_finder = makePtr<detail::GraphCutSeamFinderGpu>(GraphCutSeamFinderBase::COST_COLOR_GRAD);
         else
 #endif
@@ -677,6 +719,7 @@ int main(int argc, char* argv[])
     Mat img_warped, img_warped_s;
     Mat dilated_mask, seam_mask, mask, mask_warped;
     Ptr<Blender> blender;
+    Ptr<Timelapser> timelapser;
     //double compose_seam_aspect = 1;
     double compose_work_aspect = 1;
 
@@ -753,13 +796,13 @@ int main(int argc, char* argv[])
         resize(dilated_mask, seam_mask, mask_warped.size());
         mask_warped = seam_mask & mask_warped;
 
-        if (!blender)
+        if (!blender && !timelapse)
         {
-            blender = Blender::createDefault(blend_type, try_gpu);
+            blender = Blender::createDefault(blend_type, try_cuda);
             Size dst_sz = resultRoi(corners, sizes).size();
             float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
             if (blend_width < 1.f)
-                blender = Blender::createDefault(Blender::NO, try_gpu);
+                blender = Blender::createDefault(Blender::NO, try_cuda);
             else if (blend_type == Blender::MULTI_BAND)
             {
                 MultiBandBlender* mb = dynamic_cast<MultiBandBlender*>(blender.get());
@@ -774,17 +817,43 @@ int main(int argc, char* argv[])
             }
             blender->prepare(corners, sizes);
         }
+        else if (!timelapser && timelapse)
+        {
+            timelapser = Timelapser::createDefault(timelapse_type);
+            timelapser->initialize(corners, sizes);
+        }
 
         // Blend the current image
-        blender->feed(img_warped_s, mask_warped, corners[img_idx]);
+        if (timelapse)
+        {
+            timelapser->process(img_warped_s, Mat::ones(img_warped_s.size(), CV_8UC1), corners[img_idx]);
+            String fixedFileName;
+            size_t pos_s = String(img_names[img_idx]).find_last_of("/\\");
+            if (pos_s == String::npos)
+            {
+                fixedFileName = "fixed_" + img_names[img_idx];
+            }
+            else
+            {
+                fixedFileName = "fixed_" + String(img_names[img_idx]).substr(pos_s + 1, String(img_names[img_idx]).length() - pos_s);
+            }
+            imwrite(fixedFileName, timelapser->getDst());
+        }
+        else
+        {
+            blender->feed(img_warped_s, mask_warped, corners[img_idx]);
+        }
     }
 
-    Mat result, result_mask;
-    blender->blend(result, result_mask);
+    if (!timelapse)
+    {
+        Mat result, result_mask;
+        blender->blend(result, result_mask);
 
-    LOGLN("Compositing, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec");
+        LOGLN("Compositing, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec");
 
-    imwrite(result_name, result);
+        imwrite(result_name, result);
+    }
 
     LOGLN("Finished, total time: " << ((getTickCount() - app_start_time) / getTickFrequency()) << " sec");
     return 0;

@@ -491,6 +491,7 @@ class Core_SeqBaseTest : public Core_DynStructBaseTest
 {
 public:
     Core_SeqBaseTest();
+    virtual ~Core_SeqBaseTest();
     void clear();
     void run( int );
 
@@ -501,11 +502,14 @@ protected:
     int test_seq_ops( int iters );
 };
 
-
 Core_SeqBaseTest::Core_SeqBaseTest()
 {
 }
 
+Core_SeqBaseTest::~Core_SeqBaseTest()
+{
+    clear();
+}
 
 void Core_SeqBaseTest::clear()
 {
@@ -1206,6 +1210,7 @@ class Core_SetTest : public Core_DynStructBaseTest
 {
 public:
     Core_SetTest();
+    virtual ~Core_SetTest();
     void clear();
     void run( int );
 
@@ -1219,6 +1224,10 @@ Core_SetTest::Core_SetTest()
 {
 }
 
+Core_SetTest::~Core_SetTest()
+{
+    clear();
+}
 
 void Core_SetTest::clear()
 {
@@ -1355,7 +1364,7 @@ int  Core_SetTest::test_set_ops( int iters )
                                   (cvset->total == 0 || cvset->total >= prev_total),
                                   "The total number of cvset elements is not correct" );
 
-        // CvSet and simple set do not neccessary have the same "total" (active & free) number,
+        // CvSet and simple set do not necessary have the same "total" (active & free) number,
         // so pass "set->total" to skip that check
         test_seq_block_consistence( struct_idx, (CvSeq*)cvset, cvset->total );
         update_progressbar();
@@ -1417,6 +1426,7 @@ class Core_GraphTest : public Core_DynStructBaseTest
 {
 public:
     Core_GraphTest();
+    virtual ~Core_GraphTest();
     void clear();
     void run( int );
 
@@ -1430,6 +1440,10 @@ Core_GraphTest::Core_GraphTest()
 {
 }
 
+Core_GraphTest::~Core_GraphTest()
+{
+    clear();
+}
 
 void Core_GraphTest::clear()
 {
@@ -1777,7 +1791,7 @@ int  Core_GraphTest::test_graph_ops( int iters )
                                   (graph->edges->total == 0 || graph->edges->total >= prev_edge_total),
                                   "The total number of graph vertices is not correct" );
 
-        // CvGraph and simple graph do not neccessary have the same "total" (active & free) number,
+        // CvGraph and simple graph do not necessary have the same "total" (active & free) number,
         // so pass "graph->total" (or "graph->edges->total") to skip that check
         test_seq_block_consistence( struct_idx, (CvSeq*)graph, graph->total );
         test_seq_block_consistence( struct_idx, (CvSeq*)graph->edges, graph->edges->total );
@@ -2042,6 +2056,8 @@ void Core_GraphScanTest::run( int )
                 CV_TS_SEQ_CHECK_CONDITION( vtx_count == 0 && edge_count == 0,
                                           "Not every vertex/edge has been visited" );
                 update_progressbar();
+
+                cvReleaseGraphScanner( &scanner );
             }
 
             // for a random graph the test just checks that every graph vertex and
@@ -2106,8 +2122,6 @@ void Core_GraphScanTest::run( int )
     catch(int)
     {
     }
-
-    cvReleaseGraphScanner( &scanner );
 }
 
 

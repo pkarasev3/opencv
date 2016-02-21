@@ -47,6 +47,18 @@ macro(add_extra_compiler_option option)
   endif()
 endmacro()
 
+# Gets environment variable and puts its value to the corresponding preprocessor definition
+# Useful for WINRT that has no access to environment variables
+macro(add_env_definitions option)
+  set(value $ENV{${option}})
+  if("${value}" STREQUAL "")
+    message(WARNING "${option} environment variable is empty. Please set it to appropriate location to get correct results")
+  else()
+    string(REPLACE "\\" "\\\\" value ${value})
+  endif()
+  add_definitions("-D${option}=\"${value}\"")
+endmacro()
+
 # OpenCV fails some tests when 'char' is 'unsigned' by default
 add_extra_compiler_option(-fsigned-char)
 
@@ -98,12 +110,20 @@ if(CMAKE_COMPILER_IS_GNUCXX)
     add_extra_compiler_option(-pthread)
   endif()
 
+  if(CMAKE_COMPILER_IS_CLANGCXX)
+    add_extra_compiler_option(-Qunused-arguments)
+  endif()
+
   if(OPENCV_WARNINGS_ARE_ERRORS)
     add_extra_compiler_option(-Werror)
   endif()
 
   if(X86 AND NOT MINGW64 AND NOT X86_64 AND NOT APPLE)
     add_extra_compiler_option(-march=i686)
+  endif()
+
+  if(APPLE)
+    add_extra_compiler_option(-Wno-semicolon-before-method-body)
   endif()
 
   # Other optimizations
@@ -123,30 +143,59 @@ if(CMAKE_COMPILER_IS_GNUCXX)
   endif()
   if(ENABLE_SSE2)
     add_extra_compiler_option(-msse2)
+  elseif(X86 OR X86_64)
+    add_extra_compiler_option(-mno-sse2)
+  endif()
+  if(ENABLE_NEON)
+    add_extra_compiler_option("-mfpu=neon")
+  endif()
+  if(ENABLE_VFPV3 AND NOT ENABLE_NEON)
+    add_extra_compiler_option("-mfpu=vfpv3")
   endif()
 
   # SSE3 and further should be disabled under MingW because it generates compiler errors
   if(NOT MINGW)
     if(ENABLE_AVX)
       add_extra_compiler_option(-mavx)
+    elseif(X86 OR X86_64)
+      add_extra_compiler_option(-mno-avx)
+    endif()
+    if(ENABLE_AVX2)
+      add_extra_compiler_option(-mavx2)
+
+      if(ENABLE_FMA3)
+        add_extra_compiler_option(-mfma)
+      endif()
     endif()
 
     # GCC depresses SSEx instructions when -mavx is used. Instead, it generates new AVX instructions or AVX equivalence for all SSEx instructions when needed.
     if(NOT OPENCV_EXTRA_CXX_FLAGS MATCHES "-mavx")
       if(ENABLE_SSE3)
         add_extra_compiler_option(-msse3)
+      elseif(X86 OR X86_64)
+        add_extra_compiler_option(-mno-sse3)
       endif()
 
       if(ENABLE_SSSE3)
         add_extra_compiler_option(-mssse3)
+      elseif(X86 OR X86_64)
+        add_extra_compiler_option(-mno-ssse3)
       endif()
 
       if(ENABLE_SSE41)
         add_extra_compiler_option(-msse4.1)
+      elseif(X86 OR X86_64)
+        add_extra_compiler_option(-mno-sse4.1)
       endif()
 
       if(ENABLE_SSE42)
         add_extra_compiler_option(-msse4.2)
+      elseif(X86 OR X86_64)
+        add_extra_compiler_option(-mno-sse4.2)
+      endif()
+
+      if(ENABLE_POPCNT)
+        add_extra_compiler_option(-mpopcnt)
       endif()
     endif()
   endif(NOT MINGW)
@@ -161,10 +210,6 @@ if(CMAKE_COMPILER_IS_GNUCXX)
     endif()
   endif()
 
-  if(ENABLE_NEON)
-    add_extra_compiler_option(-mfpu=neon)
-  endif()
-
   # Profiling?
   if(ENABLE_PROFILING)
     add_extra_compiler_option("-pg -g")
@@ -177,6 +222,11 @@ if(CMAKE_COMPILER_IS_GNUCXX)
   elseif(NOT APPLE AND NOT ANDROID)
     # Remove unreferenced functions: function level linking
     add_extra_compiler_option(-ffunction-sections)
+  endif()
+
+  if(ENABLE_COVERAGE)
+    set(OPENCV_EXTRA_C_FLAGS "${OPENCV_EXTRA_C_FLAGS} --coverage")
+    set(OPENCV_EXTRA_CXX_FLAGS "${OPENCV_EXTRA_CXX_FLAGS} --coverage")
   endif()
 
   set(OPENCV_EXTRA_FLAGS_RELEASE "${OPENCV_EXTRA_FLAGS_RELEASE} -DNDEBUG")
@@ -203,7 +253,10 @@ if(MSVC)
     set(OPENCV_EXTRA_FLAGS_RELEASE "${OPENCV_EXTRA_FLAGS_RELEASE} /Zi")
   endif()
 
-  if(ENABLE_AVX AND NOT MSVC_VERSION LESS 1600)
+  if(ENABLE_AVX2 AND NOT MSVC_VERSION LESS 1800)
+    set(OPENCV_EXTRA_FLAGS "${OPENCV_EXTRA_FLAGS} /arch:AVX2")
+  endif()
+  if(ENABLE_AVX AND NOT MSVC_VERSION LESS 1600 AND NOT OPENCV_EXTRA_FLAGS MATCHES "/arch:")
     set(OPENCV_EXTRA_FLAGS "${OPENCV_EXTRA_FLAGS} /arch:AVX")
   endif()
 
@@ -225,7 +278,7 @@ if(MSVC)
     endif()
   endif()
 
-  if(ENABLE_SSE OR ENABLE_SSE2 OR ENABLE_SSE3 OR ENABLE_SSE4_1 OR ENABLE_AVX)
+  if(ENABLE_SSE OR ENABLE_SSE2 OR ENABLE_SSE3 OR ENABLE_SSE4_1 OR ENABLE_AVX OR ENABLE_AVX2)
     set(OPENCV_EXTRA_FLAGS "${OPENCV_EXTRA_FLAGS} /Oi")
   endif()
 
@@ -238,6 +291,16 @@ if(MSVC)
   if(OPENCV_WARNINGS_ARE_ERRORS)
     set(OPENCV_EXTRA_FLAGS "${OPENCV_EXTRA_FLAGS} /WX")
   endif()
+endif()
+
+if(MSVC12 AND NOT CMAKE_GENERATOR MATCHES "Visual Studio")
+  set(OPENCV_EXTRA_C_FLAGS "${OPENCV_EXTRA_C_FLAGS} /FS")
+  set(OPENCV_EXTRA_CXX_FLAGS "${OPENCV_EXTRA_CXX_FLAGS} /FS")
+endif()
+
+# Adding additional using directory for WindowsPhone 8.0 to get Windows.winmd properly
+if(WINRT_PHONE AND WINRT_8_0)
+  set(OPENCV_EXTRA_CXX_FLAGS "${OPENCV_EXTRA_CXX_FLAGS} /AI\$(WindowsSDK_MetadataPath)")
 endif()
 
 # Extra link libs if the user selects building static libs:
@@ -297,6 +360,9 @@ if(MSVC)
   endforeach()
 
   if(NOT ENABLE_NOISY_WARNINGS)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4251") #class 'std::XXX' needs to have dll-interface to be used by clients of YYY
+    ocv_warnings_disable(CMAKE_CXX_FLAGS /wd4251) # class 'std::XXX' needs to have dll-interface to be used by clients of YYY
+    ocv_warnings_disable(CMAKE_CXX_FLAGS /wd4324) # 'struct_name' : structure was padded due to __declspec(align())
+    ocv_warnings_disable(CMAKE_CXX_FLAGS /wd4275) # non dll-interface class 'std::exception' used as base for dll-interface class 'cv::Exception'
+    ocv_warnings_disable(CMAKE_CXX_FLAGS /wd4589) # Constructor of abstract class 'cv::ORB' ignores initializer for virtual base class 'cv::Algorithm'
   endif()
 endif()

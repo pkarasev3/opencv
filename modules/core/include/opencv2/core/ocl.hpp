@@ -46,18 +46,26 @@
 
 namespace cv { namespace ocl {
 
-CV_EXPORTS bool haveOpenCL();
-CV_EXPORTS bool useOpenCL();
-CV_EXPORTS bool haveAmdBlas();
-CV_EXPORTS void setUseOpenCL(bool flag);
-CV_EXPORTS void finish2();
+//! @addtogroup core_opencl
+//! @{
 
-class CV_EXPORTS Context2;
+CV_EXPORTS_W bool haveOpenCL();
+CV_EXPORTS_W bool useOpenCL();
+CV_EXPORTS_W bool haveAmdBlas();
+CV_EXPORTS_W bool haveAmdFft();
+CV_EXPORTS_W void setUseOpenCL(bool flag);
+CV_EXPORTS_W void finish();
+
+CV_EXPORTS bool haveSVM();
+
+class CV_EXPORTS Context;
 class CV_EXPORTS Device;
 class CV_EXPORTS Kernel;
 class CV_EXPORTS Program;
-class CV_EXPORTS ProgramSource2;
+class CV_EXPORTS ProgramSource;
 class CV_EXPORTS Queue;
+class CV_EXPORTS PlatformInfo;
+class CV_EXPORTS Image2D;
 
 class CV_EXPORTS Device
 {
@@ -83,9 +91,12 @@ public:
 
     String name() const;
     String extensions() const;
-    String vendor() const;
+    String version() const;
+    String vendorName() const;
     String OpenCL_C_Version() const;
     String OpenCLVersion() const;
+    int deviceVersionMajor() const;
+    int deviceVersionMinor() const;
     String driverVersion() const;
     void* ptr() const;
 
@@ -145,6 +156,10 @@ public:
 
     bool imageSupport() const;
 
+    bool imageFromBufferSupport() const;
+    uint imagePitchAlignment() const;
+    uint imageBaseAddressAlignment() const;
+
     size_t image2DMaxWidth() const;
     size_t image2DMaxHeight() const;
 
@@ -154,6 +169,22 @@ public:
 
     size_t imageMaxBufferSize() const;
     size_t imageMaxArraySize() const;
+
+    enum
+    {
+        UNKNOWN_VENDOR=0,
+        VENDOR_AMD=1,
+        VENDOR_INTEL=2,
+        VENDOR_NVIDIA=3
+    };
+    int vendorID() const;
+    // FIXIT
+    // dev.isAMD() doesn't work for OpenCL CPU devices from AMD OpenCL platform.
+    // This method should use platform name instead of vendor name.
+    // After fix restore code in arithm.cpp: ocl_compare()
+    inline bool isAMD() const { return vendorID() == VENDOR_AMD; }
+    inline bool isIntel() const { return vendorID() == VENDOR_INTEL; }
+    inline bool isNVidia() const { return vendorID() == VENDOR_NVIDIA; }
 
     int maxClockFrequency() const;
     int maxComputeUnits() const;
@@ -200,33 +231,33 @@ protected:
 };
 
 
-class CV_EXPORTS Context2
+class CV_EXPORTS Context
 {
 public:
-    Context2();
-    explicit Context2(int dtype);
-    ~Context2();
-    Context2(const Context2& c);
-    Context2& operator = (const Context2& c);
+    Context();
+    explicit Context(int dtype);
+    ~Context();
+    Context(const Context& c);
+    Context& operator = (const Context& c);
 
+    bool create();
     bool create(int dtype);
     size_t ndevices() const;
     const Device& device(size_t idx) const;
-    Program getProg(const ProgramSource2& prog,
+    Program getProg(const ProgramSource& prog,
                     const String& buildopt, String& errmsg);
 
-    static Context2& getDefault(bool initialize = true);
+    static Context& getDefault(bool initialize = true);
     void* ptr() const;
 
+    friend void initializeContextFromHandle(Context& ctx, void* platform, void* context, void* device);
+
+    bool useSVM() const;
+    void setUseSVM(bool enabled);
+
     struct Impl;
-    inline struct Impl* _getImpl() const { return p; };
-protected:
     Impl* p;
 };
-
-
-// TODO Move to internal header
-void initializeContextFromHandle(Context2& ctx, void* platform, void* context, void* device);
 
 class CV_EXPORTS Platform
 {
@@ -239,23 +270,77 @@ public:
     void* ptr() const;
     static Platform& getDefault();
 
-    struct Impl;
-    inline struct Impl* _getImpl() const { return p; };
+    friend void initializeContextFromHandle(Context& ctx, void* platform, void* context, void* device);
 protected:
+    struct Impl;
     Impl* p;
 };
 
+/*
+//! @brief Attaches OpenCL context to OpenCV
+//
+//! @note Note:
+//    OpenCV will check if available OpenCL platform has platformName name,
+//    then assign context to OpenCV and call clRetainContext function.
+//    The deviceID device will be used as target device and new command queue
+//    will be created.
+//
+// Params:
+//! @param platformName - name of OpenCL platform to attach,
+//!                       this string is used to check if platform is available
+//!                       to OpenCV at runtime
+//! @param platfromID   - ID of platform attached context was created for
+//! @param context      - OpenCL context to be attached to OpenCV
+//! @param deviceID     - ID of device, must be created from attached context
+*/
+CV_EXPORTS void attachContext(const String& platformName, void* platformID, void* context, void* deviceID);
+
+/*
+//! @brief Convert OpenCL buffer to UMat
+//
+//! @note Note:
+//   OpenCL buffer (cl_mem_buffer) should contain 2D image data, compatible with OpenCV.
+//   Memory content is not copied from clBuffer to UMat. Instead, buffer handle assigned
+//   to UMat and clRetainMemObject is called.
+//
+// Params:
+//! @param  cl_mem_buffer - source clBuffer handle
+//! @param  step          - num of bytes in single row
+//! @param  rows          - number of rows
+//! @param  cols          - number of cols
+//! @param  type          - OpenCV type of image
+//! @param  dst           - destination UMat
+*/
+CV_EXPORTS void convertFromBuffer(void* cl_mem_buffer, size_t step, int rows, int cols, int type, UMat& dst);
+
+/*
+//! @brief Convert OpenCL image2d_t to UMat
+//
+//! @note Note:
+//   OpenCL image2d_t (cl_mem_image), should be compatible with OpenCV
+//   UMat formats.
+//   Memory content is copied from image to UMat with
+//   clEnqueueCopyImageToBuffer function.
+//
+// Params:
+//! @param  cl_mem_image - source image2d_t handle
+//! @param  dst          - destination UMat
+*/
+CV_EXPORTS void convertFromImage(void* cl_mem_image, UMat& dst);
+
+// TODO Move to internal header
+void initializeContextFromHandle(Context& ctx, void* platform, void* context, void* device);
 
 class CV_EXPORTS Queue
 {
 public:
     Queue();
-    explicit Queue(const Context2& c, const Device& d=Device());
+    explicit Queue(const Context& c, const Device& d=Device());
     ~Queue();
     Queue(const Queue& q);
     Queue& operator = (const Queue& q);
 
-    bool create(const Context2& c=Context2(), const Device& d=Device());
+    bool create(const Context& c=Context(), const Device& d=Device());
     void finish();
     void* ptr() const;
     static Queue& getDefault();
@@ -270,7 +355,7 @@ class CV_EXPORTS KernelArg
 {
 public:
     enum { LOCAL=1, READ_ONLY=2, WRITE_ONLY=4, READ_WRITE=6, CONSTANT=8, PTR_ONLY = 16, NO_SIZE=256 };
-    KernelArg(int _flags, UMat* _m, int wscale=1, const void* _obj=0, size_t _sz=0);
+    KernelArg(int _flags, UMat* _m, int wscale=1, int iwscale=1, const void* _obj=0, size_t _sz=0);
     KernelArg();
 
     static KernelArg Local() { return KernelArg(LOCAL, 0); }
@@ -280,27 +365,27 @@ public:
     { return KernelArg(PTR_ONLY+READ_ONLY, (UMat*)&m); }
     static KernelArg PtrReadWrite(const UMat& m)
     { return KernelArg(PTR_ONLY+READ_WRITE, (UMat*)&m); }
-    static KernelArg ReadWrite(const UMat& m, int wscale=1)
-    { return KernelArg(READ_WRITE, (UMat*)&m, wscale); }
-    static KernelArg ReadWriteNoSize(const UMat& m, int wscale=1)
-    { return KernelArg(READ_WRITE+NO_SIZE, (UMat*)&m, wscale); }
-    static KernelArg ReadOnly(const UMat& m, int wscale=1)
-    { return KernelArg(READ_ONLY, (UMat*)&m, wscale); }
-    static KernelArg WriteOnly(const UMat& m, int wscale=1)
-    { return KernelArg(WRITE_ONLY, (UMat*)&m, wscale); }
-    static KernelArg ReadOnlyNoSize(const UMat& m, int wscale=1)
-    { return KernelArg(READ_ONLY+NO_SIZE, (UMat*)&m, wscale); }
-    static KernelArg WriteOnlyNoSize(const UMat& m, int wscale=1)
-    { return KernelArg(WRITE_ONLY+NO_SIZE, (UMat*)&m, wscale); }
+    static KernelArg ReadWrite(const UMat& m, int wscale=1, int iwscale=1)
+    { return KernelArg(READ_WRITE, (UMat*)&m, wscale, iwscale); }
+    static KernelArg ReadWriteNoSize(const UMat& m, int wscale=1, int iwscale=1)
+    { return KernelArg(READ_WRITE+NO_SIZE, (UMat*)&m, wscale, iwscale); }
+    static KernelArg ReadOnly(const UMat& m, int wscale=1, int iwscale=1)
+    { return KernelArg(READ_ONLY, (UMat*)&m, wscale, iwscale); }
+    static KernelArg WriteOnly(const UMat& m, int wscale=1, int iwscale=1)
+    { return KernelArg(WRITE_ONLY, (UMat*)&m, wscale, iwscale); }
+    static KernelArg ReadOnlyNoSize(const UMat& m, int wscale=1, int iwscale=1)
+    { return KernelArg(READ_ONLY+NO_SIZE, (UMat*)&m, wscale, iwscale); }
+    static KernelArg WriteOnlyNoSize(const UMat& m, int wscale=1, int iwscale=1)
+    { return KernelArg(WRITE_ONLY+NO_SIZE, (UMat*)&m, wscale, iwscale); }
     static KernelArg Constant(const Mat& m);
     template<typename _Tp> static KernelArg Constant(const _Tp* arr, size_t n)
-    { return KernelArg(CONSTANT, 0, 1, (void*)arr, n); }
+    { return KernelArg(CONSTANT, 0, 1, 1, (void*)arr, n); }
 
     int flags;
     UMat* m;
     const void* obj;
     size_t sz;
-    int wscale;
+    int wscale, iwscale;
 };
 
 
@@ -309,7 +394,7 @@ class CV_EXPORTS Kernel
 public:
     Kernel();
     Kernel(const char* kname, const Program& prog);
-    Kernel(const char* kname, const ProgramSource2& prog,
+    Kernel(const char* kname, const ProgramSource& prog,
            const String& buildopts = String(), String* errmsg=0);
     ~Kernel();
     Kernel(const Kernel& k);
@@ -317,10 +402,11 @@ public:
 
     bool empty() const;
     bool create(const char* kname, const Program& prog);
-    bool create(const char* kname, const ProgramSource2& prog,
+    bool create(const char* kname, const ProgramSource& prog,
                 const String& buildopts, String* errmsg=0);
 
     int set(int i, const void* value, size_t sz);
+    int set(int i, const Image2D& image2D);
     int set(int i, const UMat& m);
     int set(int i, const KernelArg& arg);
     template<typename _Tp> int set(int i, const _Tp& value)
@@ -427,11 +513,67 @@ public:
         i = set(i, a6); i = set(i, a7); i = set(i, a8); i = set(i, a9); i = set(i, a10); set(i, a11); return *this;
     }
 
+    template<typename _Tp0, typename _Tp1, typename _Tp2, typename _Tp3,
+             typename _Tp4, typename _Tp5, typename _Tp6, typename _Tp7,
+             typename _Tp8, typename _Tp9, typename _Tp10, typename _Tp11, typename _Tp12>
+    Kernel& args(const _Tp0& a0, const _Tp1& a1, const _Tp2& a2, const _Tp3& a3,
+                 const _Tp4& a4, const _Tp5& a5, const _Tp6& a6, const _Tp7& a7,
+                 const _Tp8& a8, const _Tp9& a9, const _Tp10& a10, const _Tp11& a11,
+                 const _Tp12& a12)
+    {
+        int i = set(0, a0); i = set(i, a1); i = set(i, a2); i = set(i, a3); i = set(i, a4); i = set(i, a5);
+        i = set(i, a6); i = set(i, a7); i = set(i, a8); i = set(i, a9); i = set(i, a10); i = set(i, a11);
+        set(i, a12); return *this;
+    }
+
+    template<typename _Tp0, typename _Tp1, typename _Tp2, typename _Tp3,
+             typename _Tp4, typename _Tp5, typename _Tp6, typename _Tp7,
+             typename _Tp8, typename _Tp9, typename _Tp10, typename _Tp11, typename _Tp12,
+             typename _Tp13>
+    Kernel& args(const _Tp0& a0, const _Tp1& a1, const _Tp2& a2, const _Tp3& a3,
+                 const _Tp4& a4, const _Tp5& a5, const _Tp6& a6, const _Tp7& a7,
+                 const _Tp8& a8, const _Tp9& a9, const _Tp10& a10, const _Tp11& a11,
+                 const _Tp12& a12, const _Tp13& a13)
+    {
+        int i = set(0, a0); i = set(i, a1); i = set(i, a2); i = set(i, a3); i = set(i, a4); i = set(i, a5);
+        i = set(i, a6); i = set(i, a7); i = set(i, a8); i = set(i, a9); i = set(i, a10); i = set(i, a11);
+        i = set(i, a12); set(i, a13); return *this;
+    }
+
+    template<typename _Tp0, typename _Tp1, typename _Tp2, typename _Tp3,
+             typename _Tp4, typename _Tp5, typename _Tp6, typename _Tp7,
+             typename _Tp8, typename _Tp9, typename _Tp10, typename _Tp11, typename _Tp12,
+             typename _Tp13, typename _Tp14>
+    Kernel& args(const _Tp0& a0, const _Tp1& a1, const _Tp2& a2, const _Tp3& a3,
+                 const _Tp4& a4, const _Tp5& a5, const _Tp6& a6, const _Tp7& a7,
+                 const _Tp8& a8, const _Tp9& a9, const _Tp10& a10, const _Tp11& a11,
+                 const _Tp12& a12, const _Tp13& a13, const _Tp14& a14)
+    {
+        int i = set(0, a0); i = set(i, a1); i = set(i, a2); i = set(i, a3); i = set(i, a4); i = set(i, a5);
+        i = set(i, a6); i = set(i, a7); i = set(i, a8); i = set(i, a9); i = set(i, a10); i = set(i, a11);
+        i = set(i, a12); i = set(i, a13); set(i, a14); return *this;
+    }
+
+    template<typename _Tp0, typename _Tp1, typename _Tp2, typename _Tp3,
+             typename _Tp4, typename _Tp5, typename _Tp6, typename _Tp7,
+             typename _Tp8, typename _Tp9, typename _Tp10, typename _Tp11, typename _Tp12,
+             typename _Tp13, typename _Tp14, typename _Tp15>
+    Kernel& args(const _Tp0& a0, const _Tp1& a1, const _Tp2& a2, const _Tp3& a3,
+                 const _Tp4& a4, const _Tp5& a5, const _Tp6& a6, const _Tp7& a7,
+                 const _Tp8& a8, const _Tp9& a9, const _Tp10& a10, const _Tp11& a11,
+                 const _Tp12& a12, const _Tp13& a13, const _Tp14& a14, const _Tp15& a15)
+    {
+        int i = set(0, a0); i = set(i, a1); i = set(i, a2); i = set(i, a3); i = set(i, a4); i = set(i, a5);
+        i = set(i, a6); i = set(i, a7); i = set(i, a8); i = set(i, a9); i = set(i, a10); i = set(i, a11);
+        i = set(i, a12); i = set(i, a13); i = set(i, a14); set(i, a15); return *this;
+    }
+
     bool run(int dims, size_t globalsize[],
              size_t localsize[], bool sync, const Queue& q=Queue());
     bool runTask(bool sync, const Queue& q=Queue());
 
     size_t workGroupSize() const;
+    size_t preferedWorkGroupSizeMultiple() const;
     bool compileWorkGroupSize(size_t wsz[]) const;
     size_t localMemSize() const;
 
@@ -446,7 +588,7 @@ class CV_EXPORTS Program
 {
 public:
     Program();
-    Program(const ProgramSource2& src,
+    Program(const ProgramSource& src,
             const String& buildflags, String& errmsg);
     explicit Program(const String& buf);
     Program(const Program& prog);
@@ -454,12 +596,12 @@ public:
     Program& operator = (const Program& prog);
     ~Program();
 
-    bool create(const ProgramSource2& src,
+    bool create(const ProgramSource& src,
                 const String& buildflags, String& errmsg);
     bool read(const String& buf, const String& buildflags);
     bool write(String& buf) const;
 
-    const ProgramSource2& source() const;
+    const ProgramSource& source() const;
     void* ptr() const;
 
     String getPrefix() const;
@@ -471,17 +613,17 @@ protected:
 };
 
 
-class CV_EXPORTS ProgramSource2
+class CV_EXPORTS ProgramSource
 {
 public:
     typedef uint64 hash_t;
 
-    ProgramSource2();
-    explicit ProgramSource2(const String& prog);
-    explicit ProgramSource2(const char* prog);
-    ~ProgramSource2();
-    ProgramSource2(const ProgramSource2& prog);
-    ProgramSource2& operator = (const ProgramSource2& prog);
+    ProgramSource();
+    explicit ProgramSource(const String& prog);
+    explicit ProgramSource(const char* prog);
+    ~ProgramSource();
+    ProgramSource(const ProgramSource& prog);
+    ProgramSource& operator = (const ProgramSource& prog);
 
     const String& source() const;
     hash_t hash() const;
@@ -491,9 +633,110 @@ protected:
     Impl* p;
 };
 
+class CV_EXPORTS PlatformInfo
+{
+public:
+    PlatformInfo();
+    explicit PlatformInfo(void* id);
+    ~PlatformInfo();
+
+    PlatformInfo(const PlatformInfo& i);
+    PlatformInfo& operator =(const PlatformInfo& i);
+
+    String name() const;
+    String vendor() const;
+    String version() const;
+    int deviceNumber() const;
+    void getDevice(Device& device, int d) const;
+
+protected:
+    struct Impl;
+    Impl* p;
+};
+
 CV_EXPORTS const char* convertTypeStr(int sdepth, int ddepth, int cn, char* buf);
 CV_EXPORTS const char* typeToStr(int t);
 CV_EXPORTS const char* memopTypeToStr(int t);
+CV_EXPORTS const char* vecopTypeToStr(int t);
+CV_EXPORTS String kernelToStr(InputArray _kernel, int ddepth = -1, const char * name = NULL);
+CV_EXPORTS void getPlatfomsInfo(std::vector<PlatformInfo>& platform_info);
+
+
+enum OclVectorStrategy
+{
+    // all matrices have its own vector width
+    OCL_VECTOR_OWN = 0,
+    // all matrices have maximal vector width among all matrices
+    // (useful for cases when matrices have different data types)
+    OCL_VECTOR_MAX = 1,
+
+    // default strategy
+    OCL_VECTOR_DEFAULT = OCL_VECTOR_OWN
+};
+
+CV_EXPORTS int predictOptimalVectorWidth(InputArray src1, InputArray src2 = noArray(), InputArray src3 = noArray(),
+                                         InputArray src4 = noArray(), InputArray src5 = noArray(), InputArray src6 = noArray(),
+                                         InputArray src7 = noArray(), InputArray src8 = noArray(), InputArray src9 = noArray(),
+                                         OclVectorStrategy strat = OCL_VECTOR_DEFAULT);
+
+CV_EXPORTS int checkOptimalVectorWidth(const int *vectorWidths,
+                                       InputArray src1, InputArray src2 = noArray(), InputArray src3 = noArray(),
+                                       InputArray src4 = noArray(), InputArray src5 = noArray(), InputArray src6 = noArray(),
+                                       InputArray src7 = noArray(), InputArray src8 = noArray(), InputArray src9 = noArray(),
+                                       OclVectorStrategy strat = OCL_VECTOR_DEFAULT);
+
+// with OCL_VECTOR_MAX strategy
+CV_EXPORTS int predictOptimalVectorWidthMax(InputArray src1, InputArray src2 = noArray(), InputArray src3 = noArray(),
+                                            InputArray src4 = noArray(), InputArray src5 = noArray(), InputArray src6 = noArray(),
+                                            InputArray src7 = noArray(), InputArray src8 = noArray(), InputArray src9 = noArray());
+
+CV_EXPORTS void buildOptionsAddMatrixDescription(String& buildOptions, const String& name, InputArray _m);
+
+class CV_EXPORTS Image2D
+{
+public:
+    Image2D();
+
+    // src:     The UMat from which to get image properties and data
+    // norm:    Flag to enable the use of normalized channel data types
+    // alias:   Flag indicating that the image should alias the src UMat.
+    //          If true, changes to the image or src will be reflected in
+    //          both objects.
+    explicit Image2D(const UMat &src, bool norm = false, bool alias = false);
+    Image2D(const Image2D & i);
+    ~Image2D();
+
+    Image2D & operator = (const Image2D & i);
+
+    // Indicates if creating an aliased image should succeed.  Depends on the
+    // underlying platform and the dimensions of the UMat.
+    static bool canCreateAlias(const UMat &u);
+
+    // Indicates if the image format is supported.
+    static bool isFormatSupported(int depth, int cn, bool norm);
+
+    void* ptr() const;
+protected:
+    struct Impl;
+    Impl* p;
+};
+
+
+CV_EXPORTS MatAllocator* getOpenCLAllocator();
+
+
+#ifdef __OPENCV_BUILD
+namespace internal {
+
+CV_EXPORTS bool isPerformanceCheckBypassed();
+#define OCL_PERFORMANCE_CHECK(condition) (cv::ocl::internal::isPerformanceCheckBypassed() || (condition))
+
+CV_EXPORTS bool isCLBuffer(UMat& u);
+
+} // namespace internal
+#endif
+
+//! @}
 
 }}
 

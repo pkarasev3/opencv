@@ -49,6 +49,8 @@ using namespace perf;
 //////////////////////////////////////////////////////////////////////
 // GEMM
 
+#ifdef HAVE_CUBLAS
+
 CV_FLAGS(GemmFlags, 0, cv::GEMM_1_T, cv::GEMM_2_T, cv::GEMM_3_T)
 #define ALL_GEMM_FLAGS Values(GemmFlags(0), GemmFlags(cv::GEMM_1_T), GemmFlags(cv::GEMM_2_T), GemmFlags(cv::GEMM_3_T), \
                               GemmFlags(cv::GEMM_1_T | cv::GEMM_2_T), GemmFlags(cv::GEMM_1_T | cv::GEMM_3_T), GemmFlags(cv::GEMM_1_T | cv::GEMM_2_T | cv::GEMM_3_T))
@@ -98,6 +100,8 @@ PERF_TEST_P(Sz_Type_Flags, GEMM,
     }
 }
 
+#endif
+
 //////////////////////////////////////////////////////////////////////
 // MulSpectrums
 
@@ -124,7 +128,7 @@ PERF_TEST_P(Sz_Flags, MulSpectrums,
 
         TEST_CYCLE() cv::cuda::mulSpectrums(d_a, d_b, dst, flag);
 
-        CUDA_SANITY_CHECK(dst);
+        CUDA_SANITY_CHECK(dst, 1e-6, ERROR_RELATIVE);
     }
     else
     {
@@ -158,7 +162,7 @@ PERF_TEST_P(Sz, MulAndScaleSpectrums,
 
         TEST_CYCLE() cv::cuda::mulAndScaleSpectrums(d_src1, d_src2, dst, cv::DFT_ROWS, scale, false);
 
-        CUDA_SANITY_CHECK(dst);
+        CUDA_SANITY_CHECK(dst, 1e-6, ERROR_RELATIVE);
     }
     else
     {

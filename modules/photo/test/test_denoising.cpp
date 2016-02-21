@@ -73,7 +73,7 @@ TEST(Photo_DenoisingGrayscale, regression)
 
     DUMP(result, expected_path + ".res.png");
 
-    ASSERT_EQ(0, norm(result != expected));
+    ASSERT_EQ(0, cvtest::norm(result, expected, NORM_L2));
 }
 
 TEST(Photo_DenoisingColored, regression)
@@ -93,7 +93,7 @@ TEST(Photo_DenoisingColored, regression)
 
     DUMP(result, expected_path + ".res.png");
 
-    ASSERT_EQ(0, norm(result != expected));
+    ASSERT_EQ(0, cvtest::norm(result, expected, NORM_L2));
 }
 
 TEST(Photo_DenoisingGrayscaleMulti, regression)
@@ -118,7 +118,7 @@ TEST(Photo_DenoisingGrayscaleMulti, regression)
 
     DUMP(result, expected_path + ".res.png");
 
-    ASSERT_EQ(0, norm(result != expected));
+    ASSERT_EQ(0, cvtest::norm(result, expected, NORM_L2));
 }
 
 TEST(Photo_DenoisingColoredMulti, regression)
@@ -143,7 +143,7 @@ TEST(Photo_DenoisingColoredMulti, regression)
 
     DUMP(result, expected_path + ".res.png");
 
-    ASSERT_EQ(0, norm(result != expected));
+    ASSERT_EQ(0, cvtest::norm(result, expected, NORM_L2));
 }
 
 TEST(Photo_White, issue_2646)
@@ -155,4 +155,15 @@ TEST(Photo_White, issue_2646)
     int nonWhitePixelsCount = (int)img.total() - cv::countNonZero(filtered == img);
 
     ASSERT_EQ(0, nonWhitePixelsCount);
+}
+
+TEST(Photo_Denoising, speed)
+{
+    string imgname = string(cvtest::TS::ptr()->get_data_path()) + "shared/5MP.png";
+    Mat src = imread(imgname, 0), dst;
+
+    double t = (double)getTickCount();
+    fastNlMeansDenoising(src, dst, 5, 7, 21);
+    t = (double)getTickCount() - t;
+    printf("execution time: %gms\n", t*1000./getTickFrequency());
 }

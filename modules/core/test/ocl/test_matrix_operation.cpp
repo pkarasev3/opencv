@@ -44,7 +44,7 @@
 //
 //M*/
 
-#include "test_precomp.hpp"
+#include "../test_precomp.hpp"
 #include "opencv2/ts/ocl_test.hpp"
 
 #ifdef HAVE_OPENCL
@@ -54,13 +54,13 @@ namespace ocl {
 
 ////////////////////////////////converto/////////////////////////////////////////////////
 
-PARAM_TEST_CASE(MatrixTestBase, MatDepth, MatDepth, Channels, bool)
+PARAM_TEST_CASE(ConvertTo, MatDepth, MatDepth, Channels, bool)
 {
     int src_depth, cn, dstType;
     bool use_roi;
 
-    TEST_DECLARE_INPUT_PARAMETER(src)
-    TEST_DECLARE_OUTPUT_PARAMETER(dst)
+    TEST_DECLARE_INPUT_PARAMETER(src);
+    TEST_DECLARE_OUTPUT_PARAMETER(dst);
 
     virtual void SetUp()
     {
@@ -80,14 +80,12 @@ PARAM_TEST_CASE(MatrixTestBase, MatDepth, MatDepth, Channels, bool)
         Border dstBorder = randomBorder(0, use_roi ? MAX_VALUE : 0);
         randomSubMat(dst, dst_roi, roiSize, dstBorder, dstType, 5, 16);
 
-        UMAT_UPLOAD_INPUT_PARAMETER(src)
-        UMAT_UPLOAD_OUTPUT_PARAMETER(dst)
+        UMAT_UPLOAD_INPUT_PARAMETER(src);
+        UMAT_UPLOAD_OUTPUT_PARAMETER(dst);
     }
 };
 
-typedef MatrixTestBase ConvertTo;
-
-OCL_TEST_P(ConvertTo, Accuracy)
+OCL_TEST_P(ConvertTo, WithScale_Accuracy)
 {
     for (int j = 0; j < test_loop_times; j++)
     {
@@ -98,13 +96,128 @@ OCL_TEST_P(ConvertTo, Accuracy)
         OCL_OFF(src_roi.convertTo(dst_roi, dstType, alpha, beta));
         OCL_ON(usrc_roi.convertTo(udst_roi, dstType, alpha, beta));
 
-        double eps = src_depth >= CV_32F || CV_MAT_DEPTH(dstType) >= CV_32F ? 1e-4 : 1;
+        double eps = CV_MAT_DEPTH(dstType) >= CV_32F ? 2e-4 : 1;
         OCL_EXPECT_MATS_NEAR(dst, eps);
     }
 }
 
+OCL_TEST_P(ConvertTo, NoScale_Accuracy)
+{
+    for (int j = 0; j < test_loop_times; j++)
+    {
+        generateTestData();
+
+        OCL_OFF(src_roi.convertTo(dst_roi, dstType, 1, 0));
+        OCL_ON(usrc_roi.convertTo(udst_roi, dstType, 1, 0));
+
+        double eps = CV_MAT_DEPTH(dstType) >= CV_32F ? 2e-4 : 1;
+        OCL_EXPECT_MATS_NEAR(dst, eps);
+    }
+}
+
+//////////////////////////////// CopyTo /////////////////////////////////////////////////
+
+PARAM_TEST_CASE(CopyTo, MatDepth, Channels, bool, bool)
+{
+    int depth, cn;
+    bool use_roi, use_mask;
+    Scalar val;
+
+    TEST_DECLARE_INPUT_PARAMETER(src);
+    TEST_DECLARE_INPUT_PARAMETER(mask);
+    TEST_DECLARE_OUTPUT_PARAMETER(dst);
+
+    virtual void SetUp()
+    {
+        depth = GET_PARAM(0);
+        cn = GET_PARAM(1);
+        use_roi = GET_PARAM(2);
+        use_mask = GET_PARAM(3);
+    }
+
+    void generateTestData(bool one_cn_mask = false)
+    {
+        const int type = CV_MAKE_TYPE(depth, cn);
+
+        Size roiSize = randomSize(1, MAX_VALUE);
+        Border srcBorder = randomBorder(0, use_roi ? MAX_VALUE : 0);
+        randomSubMat(src, src_roi, roiSize, srcBorder, type, -MAX_VALUE, MAX_VALUE);
+
+        if (use_mask)
+        {
+            Border maskBorder = randomBorder(0, use_roi ? MAX_VALUE : 0);
+            int mask_cn = 1;
+            if (!one_cn_mask && randomDouble(0.0, 2.0) > 1.0)
+                mask_cn = cn;
+            randomSubMat(mask, mask_roi, roiSize, maskBorder, CV_8UC(mask_cn), 0, 2);
+            cv::threshold(mask, mask, 0.5, 255., THRESH_BINARY);
+        }
+
+        Border dstBorder = randomBorder(0, use_roi ? MAX_VALUE : 0);
+        randomSubMat(dst, dst_roi, roiSize, dstBorder, type, 5, 16);
+
+        UMAT_UPLOAD_INPUT_PARAMETER(src);
+        if (use_mask)
+            UMAT_UPLOAD_INPUT_PARAMETER(mask);
+        UMAT_UPLOAD_OUTPUT_PARAMETER(dst);
+
+        val = randomScalar(-MAX_VALUE, MAX_VALUE);
+    }
+};
+
+
+OCL_TEST_P(CopyTo, Accuracy)
+{
+    for (int j = 0; j < test_loop_times; j++)
+    {
+        generateTestData();
+
+        if (use_mask)
+        {
+            OCL_OFF(src_roi.copyTo(dst_roi, mask_roi));
+            OCL_ON(usrc_roi.copyTo(udst_roi, umask_roi));
+        }
+        else
+        {
+            OCL_OFF(src_roi.copyTo(dst_roi));
+            OCL_ON(usrc_roi.copyTo(udst_roi));
+        }
+
+        OCL_EXPECT_MATS_NEAR(dst, 0);
+    }
+}
+
+typedef CopyTo SetTo;
+
+OCL_TEST_P(SetTo, Accuracy)
+{
+    for (int j = 0; j < test_loop_times; j++)
+    {
+        generateTestData(true); // see modules/core/src/umatrix.cpp Ln:791 => CV_Assert( mask.size() == size() && mask.type() == CV_8UC1 );
+
+        if (use_mask)
+        {
+            OCL_OFF(dst_roi.setTo(val, mask_roi));
+            OCL_ON(udst_roi.setTo(val, umask_roi));
+        }
+        else
+        {
+            OCL_OFF(dst_roi.setTo(val));
+            OCL_ON(udst_roi.setTo(val));
+        }
+
+        OCL_EXPECT_MATS_NEAR(dst, 0);
+    }
+}
+
 OCL_INSTANTIATE_TEST_CASE_P(MatrixOperation, ConvertTo, Combine(
-                            OCL_ALL_DEPTHS, OCL_ALL_DEPTHS, OCL_ALL_CHANNELS, Bool()));
+                                OCL_ALL_DEPTHS, OCL_ALL_DEPTHS, OCL_ALL_CHANNELS, Bool()));
+
+OCL_INSTANTIATE_TEST_CASE_P(MatrixOperation, CopyTo, Combine(
+                                OCL_ALL_DEPTHS, OCL_ALL_CHANNELS, Bool(), Bool()));
+
+OCL_INSTANTIATE_TEST_CASE_P(MatrixOperation, SetTo, Combine(
+                                OCL_ALL_DEPTHS, OCL_ALL_CHANNELS, Bool(), Bool()));
 
 } } // namespace cvtest::ocl
 
