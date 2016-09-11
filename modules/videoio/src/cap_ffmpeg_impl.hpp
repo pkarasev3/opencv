@@ -209,7 +209,8 @@ extern "C" {
 #endif
 
 #if USE_AV_INTERRUPT_CALLBACK
-#define LIBAVFORMAT_INTERRUPT_TIMEOUT_MS 30000
+#define LIBAVFORMAT_INTERRUPT_OPEN_TIMEOUT_MS 30000
+#define LIBAVFORMAT_INTERRUPT_READ_TIMEOUT_MS 30000
 
 #ifdef WIN32
 // http://stackoverflow.com/questions/5404277/porting-clock-gettime-to-windows
@@ -393,6 +394,11 @@ inline int _opencv_ffmpeg_interrupt_callback(void *ptr)
 {
     AVInterruptCallbackMetadata* metadata = (AVInterruptCallbackMetadata*)ptr;
     assert(metadata);
+
+    if (metadata->timeout_after_ms == 0)
+    {
+        return 0; // timeout is disabled
+    }
 
     timespec now;
     get_monotonic_time(&now);
@@ -793,7 +799,7 @@ bool CvCapture_FFMPEG::open( const char* _filename )
 
 #if USE_AV_INTERRUPT_CALLBACK
     /* interrupt callback */
-    interrupt_metadata.timeout_after_ms = LIBAVFORMAT_INTERRUPT_TIMEOUT_MS;
+    interrupt_metadata.timeout_after_ms = LIBAVFORMAT_INTERRUPT_OPEN_TIMEOUT_MS;
     get_monotonic_time(&interrupt_metadata.value);
 
     ic = avformat_alloc_context();
@@ -885,6 +891,11 @@ bool CvCapture_FFMPEG::open( const char* _filename )
 
 exit_func:
 
+#if USE_AV_INTERRUPT_CALLBACK
+    // deactivate interrupt callback
+    interrupt_metadata.timeout_after_ms = 0;
+#endif
+
     if( !valid )
         close();
 
@@ -907,6 +918,12 @@ bool CvCapture_FFMPEG::grabFrame()
         return false;
 
     picture_pts = AV_NOPTS_VALUE_;
+
+#if USE_AV_INTERRUPT_CALLBACK
+    // activate interrupt callback
+    get_monotonic_time(&interrupt_metadata.value);
+    interrupt_metadata.timeout_after_ms = LIBAVFORMAT_INTERRUPT_READ_TIMEOUT_MS;
+#endif
 
     // get the next frame
     while (!valid)
@@ -954,14 +971,10 @@ bool CvCapture_FFMPEG::grabFrame()
         {
             //picture_pts = picture->best_effort_timestamp;
             if( picture_pts == AV_NOPTS_VALUE_ )
-                picture_pts = packet.pts != AV_NOPTS_VALUE_ && packet.pts != 0 ? packet.pts : packet.dts;
+                picture_pts = picture->pkt_pts != AV_NOPTS_VALUE_ && picture->pkt_pts != 0 ? picture->pkt_pts : picture->pkt_dts;
+
             frame_number++;
             valid = true;
-
-#if USE_AV_INTERRUPT_CALLBACK
-            // update interrupt value
-            get_monotonic_time(&interrupt_metadata.value);
-#endif
         }
         else
         {
@@ -973,6 +986,11 @@ bool CvCapture_FFMPEG::grabFrame()
 
     if( valid && first_frame_number < 0 )
         first_frame_number = dts_to_frame_number(picture_pts);
+
+#if USE_AV_INTERRUPT_CALLBACK
+    // deactivate interrupt callback
+    interrupt_metadata.timeout_after_ms = 0;
+#endif
 
     // return if we have a new picture or not
     return valid;
@@ -1117,6 +1135,9 @@ int CvCapture_FFMPEG::get_bitrate() const
 
 double CvCapture_FFMPEG::get_fps() const
 {
+#if 0 && LIBAVFORMAT_BUILD >= CALC_FFMPEG_VERSION(55, 1, 100) && LIBAVFORMAT_VERSION_MICRO >= 100
+    double fps = r2d(av_guess_frame_rate(ic, ic->streams[video_stream], NULL));
+#else
 #if LIBAVCODEC_BUILD >= CALC_FFMPEG_VERSION(54, 1, 0)
     double fps = r2d(ic->streams[video_stream]->avg_frame_rate);
 #else
@@ -1134,7 +1155,7 @@ double CvCapture_FFMPEG::get_fps() const
     {
         fps = 1.0 / r2d(ic->streams[video_stream]->codec->time_base);
     }
-
+#endif
     return fps;
 }
 
@@ -1302,7 +1323,7 @@ struct CvVideoWriter_FFMPEG
     uint8_t         * picbuf;
     AVStream        * video_st;
     int               input_pix_fmt;
-    Image_FFMPEG      temp_image;
+    unsigned char   * aligned_input;
     int               frame_width, frame_height;
     int               frame_idx;
     bool              ok;
@@ -1379,7 +1400,7 @@ void CvVideoWriter_FFMPEG::init()
     picbuf = 0;
     video_st = 0;
     input_pix_fmt = 0;
-    memset(&temp_image, 0, sizeof(temp_image));
+    aligned_input = NULL;
     img_convert_ctx = 0;
     frame_width = frame_height = 0;
     frame_idx = 0;
@@ -1561,6 +1582,10 @@ static AVStream *icv_add_video_stream_FFMPEG(AVFormatContext *oc,
     }
 #endif
 
+#if LIBAVCODEC_BUILD >= CALC_FFMPEG_VERSION(52, 42, 0)
+    st->avg_frame_rate = (AVRational){frame_rate, frame_rate_base};
+#endif
+
     return st;
 }
 
@@ -1648,59 +1673,6 @@ static int icv_av_write_frame_FFMPEG( AVFormatContext * oc, AVStream * video_st,
 /// write a frame with FFMPEG
 bool CvVideoWriter_FFMPEG::writeFrame( const unsigned char* data, int step, int width, int height, int cn, int origin )
 {
-    bool ret = false;
-
-    if( (width & -2) != frame_width || (height & -2) != frame_height || !data )
-        return false;
-    width = frame_width;
-    height = frame_height;
-
-    // typecast from opaque data type to implemented struct
-#if LIBAVFORMAT_BUILD > 4628
-    AVCodecContext *c = video_st->codec;
-#else
-    AVCodecContext *c = &(video_st->codec);
-#endif
-
-#if LIBAVFORMAT_BUILD < 5231
-    // It is not needed in the latest versions of the ffmpeg
-    if( c->codec_id == CV_CODEC(CODEC_ID_RAWVIDEO) && origin != 1 )
-    {
-        if( !temp_image.data )
-        {
-            temp_image.step = (width*cn + 3) & -4;
-            temp_image.width = width;
-            temp_image.height = height;
-            temp_image.cn = cn;
-            temp_image.data = (unsigned char*)malloc(temp_image.step*temp_image.height);
-        }
-        for( int y = 0; y < height; y++ )
-            memcpy(temp_image.data + y*temp_image.step, data + (height-1-y)*step, width*cn);
-        data = temp_image.data;
-        step = temp_image.step;
-    }
-#else
-    if( width*cn != step )
-    {
-        if( !temp_image.data )
-        {
-            temp_image.step = width*cn;
-            temp_image.width = width;
-            temp_image.height = height;
-            temp_image.cn = cn;
-            temp_image.data = (unsigned char*)malloc(temp_image.step*temp_image.height);
-        }
-        if (origin == 1)
-            for( int y = 0; y < height; y++ )
-                memcpy(temp_image.data + y*temp_image.step, data + (height-1-y)*step, temp_image.step);
-        else
-            for( int y = 0; y < height; y++ )
-                memcpy(temp_image.data + y*temp_image.step, data + y*step, temp_image.step);
-        data = temp_image.data;
-        step = temp_image.step;
-    }
-#endif
-
     // check parameters
     if (input_pix_fmt == AV_PIX_FMT_BGR24) {
         if (cn != 3) {
@@ -1716,11 +1688,49 @@ bool CvVideoWriter_FFMPEG::writeFrame( const unsigned char* data, int step, int 
         assert(false);
     }
 
+    if( (width & -2) != frame_width || (height & -2) != frame_height || !data )
+        return false;
+    width = frame_width;
+    height = frame_height;
+
+    // typecast from opaque data type to implemented struct
+#if LIBAVFORMAT_BUILD > 4628
+    AVCodecContext *c = video_st->codec;
+#else
+    AVCodecContext *c = &(video_st->codec);
+#endif
+
+    // FFmpeg contains SIMD optimizations which can sometimes read data past
+    // the supplied input buffer. To ensure that doesn't happen, we pad the
+    // step to a multiple of 32 (that's the minimal alignment for which Valgrind
+    // doesn't raise any warnings).
+    const int STEP_ALIGNMENT = 32;
+    if( step % STEP_ALIGNMENT != 0 )
+    {
+        int aligned_step = (step + STEP_ALIGNMENT - 1) & -STEP_ALIGNMENT;
+
+        if( !aligned_input )
+        {
+            aligned_input = (unsigned char*)av_mallocz(aligned_step * height);
+        }
+
+        if (origin == 1)
+            for( int y = 0; y < height; y++ )
+                memcpy(aligned_input + y*aligned_step, data + (height-1-y)*step, step);
+        else
+            for( int y = 0; y < height; y++ )
+                memcpy(aligned_input + y*aligned_step, data + y*step, step);
+
+        data = aligned_input;
+        step = aligned_step;
+    }
+
     if ( c->pix_fmt != input_pix_fmt ) {
         assert( input_picture );
         // let input_picture point to the raw data buffer of 'image'
         _opencv_ffmpeg_av_image_fill_arrays(input_picture, (uint8_t *) data,
                        (AVPixelFormat)input_pix_fmt, width, height);
+        input_picture->linesize[0] = step;
 
         if( !img_convert_ctx )
         {
@@ -1745,10 +1755,11 @@ bool CvVideoWriter_FFMPEG::writeFrame( const unsigned char* data, int step, int 
     else{
         _opencv_ffmpeg_av_image_fill_arrays(picture, (uint8_t *) data,
                        (AVPixelFormat)input_pix_fmt, width, height);
+        picture->linesize[0] = step;
     }
 
     picture->pts = frame_idx;
-    ret = icv_av_write_frame_FFMPEG( oc, video_st, outbuf, outbuf_size, picture) >= 0;
+    bool ret = icv_av_write_frame_FFMPEG( oc, video_st, outbuf, outbuf_size, picture) >= 0;
     frame_idx++;
 
     return ret;
@@ -1831,11 +1842,7 @@ void CvVideoWriter_FFMPEG::close()
     /* free the stream */
     avformat_free_context(oc);
 
-    if( temp_image.data )
-    {
-        free(temp_image.data);
-        temp_image.data = 0;
-    }
+    av_freep(&aligned_input);
 
     init();
 }
@@ -2563,7 +2570,7 @@ bool InputMediaStream_FFMPEG::open(const char* fileName, int* codec, int* chroma
 
 #if USE_AV_INTERRUPT_CALLBACK
     /* interrupt callback */
-    interrupt_metadata.timeout_after_ms = LIBAVFORMAT_INTERRUPT_TIMEOUT_MS;
+    interrupt_metadata.timeout_after_ms = LIBAVFORMAT_INTERRUPT_OPEN_TIMEOUT_MS;
     get_monotonic_time(&interrupt_metadata.value);
 
     ctx_ = avformat_alloc_context();
@@ -2659,6 +2666,11 @@ bool InputMediaStream_FFMPEG::open(const char* fileName, int* codec, int* chroma
 
     av_init_packet(&pkt_);
 
+#if USE_AV_INTERRUPT_CALLBACK
+    // deactivate interrupt callback
+    interrupt_metadata.timeout_after_ms = 0;
+#endif
+
     return true;
 }
 
@@ -2680,6 +2692,14 @@ void InputMediaStream_FFMPEG::close()
 
 bool InputMediaStream_FFMPEG::read(unsigned char** data, int* size, int* endOfFile)
 {
+    bool result = false;
+
+#if USE_AV_INTERRUPT_CALLBACK
+    // activate interrupt callback
+    get_monotonic_time(&interrupt_metadata.value);
+    interrupt_metadata.timeout_after_ms = LIBAVFORMAT_INTERRUPT_READ_TIMEOUT_MS;
+#endif
+
     // free last packet if exist
     if (pkt_.data)
         _opencv_ffmpeg_av_packet_unref(&pkt_);
@@ -2699,16 +2719,11 @@ bool InputMediaStream_FFMPEG::read(unsigned char** data, int* size, int* endOfFi
         if (ret == AVERROR(EAGAIN))
             continue;
 
-#if USE_AV_INTERRUPT_CALLBACK
-        // update interrupt value
-        get_monotonic_time(&interrupt_metadata.value);
-#endif
-
         if (ret < 0)
         {
             if (ret == (int)AVERROR_EOF)
                 *endOfFile = true;
-            return false;
+            break;
         }
 
         if (pkt_.stream_index != video_stream_id_)
@@ -2717,14 +2732,23 @@ bool InputMediaStream_FFMPEG::read(unsigned char** data, int* size, int* endOfFi
             continue;
         }
 
+        result = true;
         break;
     }
 
-    *data = pkt_.data;
-    *size = pkt_.size;
-    *endOfFile = false;
+#if USE_AV_INTERRUPT_CALLBACK
+    // deactivate interrupt callback
+    interrupt_metadata.timeout_after_ms = 0;
+#endif
 
-    return true;
+    if (result)
+    {
+        *data = pkt_.data;
+        *size = pkt_.size;
+        *endOfFile = false;
+    }
+
+    return result;
 }
 
 InputMediaStream_FFMPEG* create_InputMediaStream_FFMPEG(const char* fileName, int* codec, int* chroma_format, int* width, int* height)

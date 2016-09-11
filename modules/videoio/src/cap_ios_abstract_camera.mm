@@ -37,7 +37,7 @@
 
 @interface CvAbstractCamera ()
 
-@property (nonatomic, retain) AVCaptureVideoPreviewLayer* captureVideoPreviewLayer;
+@property (nonatomic, strong) AVCaptureVideoPreviewLayer* captureVideoPreviewLayer;
 
 - (void)deviceOrientationDidChange:(NSNotification*)notification;
 - (void)startCaptureSession;
@@ -170,7 +170,7 @@
     }
     running = YES;
 
-    // TOOD update image size data before actually starting (needed for recording)
+    // TODO: update image size data before actually starting (needed for recording)
     [self updateSize];
 
     if (cameraAvailable) {
@@ -193,16 +193,19 @@
 
     // Release any retained subviews of the main view.
     // e.g. self.myOutlet = nil;
-    for (AVCaptureInput *input in self.captureSession.inputs) {
-        [self.captureSession removeInput:input];
+    if (self.captureSession) {
+        for (AVCaptureInput *input in self.captureSession.inputs) {
+            [self.captureSession removeInput:input];
+        }
+
+        for (AVCaptureOutput *output in self.captureSession.outputs) {
+            [self.captureSession removeOutput:output];
+        }
+
+        [self.captureSession stopRunning];
+        self.captureSession = nil;
     }
 
-    for (AVCaptureOutput *output in self.captureSession.outputs) {
-        [self.captureSession removeOutput:output];
-    }
-
-    [self.captureSession stopRunning];
-    self.captureSession = nil;
     self.captureVideoPreviewLayer = nil;
     self.videoCaptureConnection = nil;
     captureSessionLoaded = NO;
